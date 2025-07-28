@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "266720440078",
+    "project_id": "gyre-compare",
+    "storage_bucket": "gyre-compare.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:266720440078:android:3feadecd459c79ab18b15f",
+        "android_client_info": {
+          "package_name": "com.example.gyro_compare_fixed"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBuWJLOvmlpylyVFhivRfMEZSVGm1lA2jY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:266720440078:android:be56bc596500b60718b15f",
+        "android_client_info": {
+          "package_name": "com.gyro.andriod"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBuWJLOvmlpylyVFhivRfMEZSVGm1lA2jY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
