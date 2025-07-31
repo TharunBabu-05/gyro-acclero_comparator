@@ -12,7 +12,7 @@ void main() async {
   
   try {
     await Firebase.initializeApp(
-      options: FirebaseOptions(
+      options: const FirebaseOptions(
         apiKey: 'AIzaSyBuWJLOvmlpylyVFhivRfMEZSVGm1lA2jY',
         appId: '1:266720440078:android:3feadecd459c79ab18b15f',
         messagingSenderId: '266720440078',
@@ -25,8 +25,7 @@ void main() async {
     // Test Firebase connection
     final database = FirebaseDatabase.instance;
     await database.ref('.info/connected').get();
-    print('Firebase connection successful');
-    
+    print('Firebase initialized successfully');
   } catch (e) {
     print('Firebase initialization error: $e');
   }
@@ -38,71 +37,66 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Motion Sync Detection',
-      theme: ThemeData(primarySwatch: Colors.blue),
-      home: MotionSyncPage(),
+      title: 'Bus Fraud Detection',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(primarySwatch: Colors.red),
+      home: BusFraudDetectionPage(),
     );
   }
 }
 
-class MotionSyncPage extends StatefulWidget {
+class BusFraudDetectionPage extends StatefulWidget {
   @override
-  _MotionSyncPageState createState() => _MotionSyncPageState();
+  _BusFraudDetectionPageState createState() => _BusFraudDetectionPageState();
 }
 
-class _MotionSyncPageState extends State<MotionSyncPage> {
+class _BusFraudDetectionPageState extends State<BusFraudDetectionPage> {
   final database = FirebaseDatabase.instance.ref();
-  late StreamSubscription<AccelerometerEvent> _accelSub;
-  late StreamSubscription<GyroscopeEvent> _gyroSub;
+  StreamSubscription<AccelerometerEvent>? _accelSub;
+  StreamSubscription<GyroscopeEvent>? _gyroSub;
   Timer? _gpsTimer;
+  StreamSubscription? _otherDeviceSub;
+  StreamSubscription? _passengerSessionListener;
 
+  // Motion and sensor data
   List<double> _myAccel = [0, 0, 0];
-  List<double> _otherAccel = [0, 0, 0];
-
+  List<double> _otherAccel = [0, 0, 0];  
   List<double> _myGyro = [0, 0, 0];
   List<double> _otherGyro = [0, 0, 0];
-
   double _mySpeed = 0.0;
   double _otherSpeed = 0.0;
   
-  // Add location tracking
+  // Location data
   double _myLatitude = 0.0;
   double _myLongitude = 0.0;
   double _otherLatitude = 0.0;
   double _otherLongitude = 0.0;
 
+  // Status flags
   bool isSameMotion = false;
   bool isSameLocation = false;
   bool isSameCoordinate = false;
   bool isConnected = false;
+  bool isValidatingTicket = false;
+  bool fraudDetected = false;
 
+  // Connection data
   String connectionKey = "";
   String? sessionKey;
-  String deviceId = DateTime.now().millisecondsSinceEpoch.toString(); // Unique ID for each device
+  String deviceId = "bus_validator_${DateTime.now().millisecondsSinceEpoch}";
+  String busId = "BUS_001";
+  
+  // Fraud detection variables
+  String? currentPassengerId;
+  int plannedExitStop = 0;
+  int currentBusStop = 0;
+  double correlationScore = 0.0;
+  double penaltyAmount = 0.0;
 
   Future<bool> _checkLocationPermission() async {
-    // First check if location service is enabled
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (BuildContext context) {
-          return AlertDialog(
-            title: Text('Location Required'),
-            content: Text('This app needs location services to work. Please enable location services.'),
-            actions: [
-              TextButton(
-                child: Text('OPEN SETTINGS'),
-                onPressed: () async {
-                  await Geolocator.openLocationSettings();
-                  Navigator.of(context).pop();
-                },
-              ),
-            ],
-          );
-        },
-      );
+      _showLocationDialog();
       return false;
     }
 
@@ -133,78 +127,38 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
     return true;
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _initializeApp();
-  }
-
-  Future<void> _showConnectionDialog() async {
-    String? result = await showDialog<String>(
+  void _showLocationDialog() {
+    showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
-        String tempKey = '';
         return AlertDialog(
-          title: Text('Enter Connection Code'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Enter the same code on both devices to connect:'),
-              SizedBox(height: 10),
-              TextField(
-                onChanged: (value) => tempKey = value.toUpperCase(),
-                textCapitalization: TextCapitalization.characters,
-                style: TextStyle(fontSize: 24, letterSpacing: 8),
-                textAlign: TextAlign.center,
-                maxLength: 6,
-                decoration: InputDecoration(
-                  hintText: 'ABC123',
-                  border: OutlineInputBorder(),
-                  counterText: "",
-                ),
-              ),
-              SizedBox(height: 10),
-              Text(
-                'Make sure both devices have internet connection',
-                style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
+          title: Text('Location Required'),
+          content: Text('This app needs location services to work. Please enable location services.'),
           actions: [
             TextButton(
-              child: Text('Connect'),
-              onPressed: () {
-                if (tempKey.length >= 4) {
-                  Navigator.of(context).pop(tempKey);
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Please enter at least 4 characters'))
-                  );
-                }
+              child: Text('OPEN SETTINGS'),
+              onPressed: () async {
+                await Geolocator.openLocationSettings();
+                Navigator.of(context).pop();
               },
             ),
           ],
         );
       },
     );
+  }
 
-    if (result != null && result.isNotEmpty) {
-      setState(() {
-        sessionKey = result.toUpperCase();
-        connectionKey = result.toUpperCase();
-      });
-      _startListening();
-      _listenToOtherDevice();
-      _startGpsUpdates();
-    }
+  @override
+  void initState() {
+    super.initState();
+    _initializeApp();
   }
 
   Future<void> _initializeApp() async {
     bool hasPermission = await _checkLocationPermission();
     if (hasPermission) {
-      _showConnectionDialog();
+      _startFraudDetectionMode();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -219,17 +173,80 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
     }
   }
 
+  void _startFraudDetectionMode() {
+    // Start listening for new passenger sessions from Smart Ticket MTC
+    _listenForPassengerSessions();
+    // Start collecting this device's sensor data (bus data)
+    _startListening();
+    _startGpsUpdates();
+    // Register this device as a bus validator
+    _registerBusValidator();
+  }
+
+  void _registerBusValidator() {
+    database.child('bus_validators/$busId').set({
+      'deviceId': deviceId,
+      'status': 'active',
+      'route': 'Route_42',
+      'current_stop': currentBusStop,
+      'lastUpdate': ServerValue.timestamp,
+    });
+  }
+
+  void _listenForPassengerSessions() {
+    _passengerSessionListener = database.child('passenger_sessions').onChildAdded.listen((event) {
+      final sessionData = event.snapshot.value as Map?;
+      if (sessionData != null) {
+        String sessionId = event.snapshot.key ?? '';
+        String passengerId = sessionData['passenger_id'] ?? '';
+        String ticketId = sessionData['ticket_id'] ?? '';
+        int plannedExit = sessionData['planned_exit_stop'] ?? 0;
+        String status = sessionData['status'] ?? '';
+        
+        if (sessionId.isNotEmpty && status == 'active') {
+          _connectToPassenger(sessionId, passengerId, ticketId, plannedExit);
+        }
+      }
+    });
+  }
+
+  void _connectToPassenger(String sessionId, String passengerId, String ticketId, int plannedExit) {
+    setState(() {
+      sessionKey = sessionId;
+      connectionKey = sessionId;
+      isValidatingTicket = true;
+      currentPassengerId = passengerId;
+      plannedExitStop = plannedExit;
+      fraudDetected = false;
+    });
+    
+    // Start listening to passenger's device sensor data
+    _listenToPassengerDevice(sessionId, passengerId);
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('🚌 New passenger detected!\nTicket: $ticketId\nPlanned Exit: Stop $plannedExit'),
+        duration: Duration(seconds: 4),
+        backgroundColor: Colors.blue,
+      ),
+    );
+  }
+
   void _startListening() {
     _accelSub = accelerometerEvents.listen((AccelerometerEvent event) {
-      _myAccel = [event.x, event.y, event.z];
+      setState(() {
+        _myAccel = [event.x, event.y, event.z];
+      });
       _sendToFirebase();
-      _compareMotion();
+      _compareMotionForFraudDetection();
     });
 
     _gyroSub = gyroscopeEvents.listen((GyroscopeEvent event) {
-      _myGyro = [event.x, event.y, event.z];
+      setState(() {
+        _myGyro = [event.x, event.y, event.z];
+      });
       _sendToFirebase();
-      _compareMotion();
+      _compareMotionForFraudDetection();
     });
   }
 
@@ -244,23 +261,31 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
         if (permission == LocationPermission.deniedForever) return;
       }
 
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high
-      );
-      setState(() {
-        _mySpeed = position.speed; // speed in m/s
-        _myLatitude = position.latitude;
-        _myLongitude = position.longitude;
-      });
-      _sendToFirebase();
-      _compareMotion();
+      try {
+        Position position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high
+        );
+        setState(() {
+          _mySpeed = position.speed;
+          _myLatitude = position.latitude;
+          _myLongitude = position.longitude;
+        });
+        _sendToFirebase();
+        _compareMotionForFraudDetection();
+      } catch (e) {
+        print('GPS error: $e');
+      }
     });
   }
 
   void _sendToFirebase() {
     if (sessionKey == null) return;
     
+    // Send bus device data (this is the bus validator device)
     database.child('sessions/$sessionKey/$deviceId').set({
+      'device_type': 'bus_validator',
+      'bus_id': busId,
+      'current_stop': currentBusStop,
       'accel': {'x': _myAccel[0], 'y': _myAccel[1], 'z': _myAccel[2]},
       'gyro': {'x': _myGyro[0], 'y': _myGyro[1], 'z': _myGyro[2]},
       'speed': _mySpeed,
@@ -268,19 +293,22 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
         'latitude': _myLatitude,
         'longitude': _myLongitude,
       },
-      'lastUpdate': ServerValue.timestamp,
+      'last_update': ServerValue.timestamp,
+    }).then((_) {
+      // Remove this device's data when disconnected
+      database.child('sessions/$sessionKey/$deviceId')
+        .onDisconnect()
+        .remove();
     });
   }
 
-  StreamSubscription? _otherDeviceSub;
-
-  void _listenToOtherDevice() {
-    if (sessionKey == null) return;
+  void _listenToPassengerDevice(String sessionId, String passengerId) {
+    if (sessionId.isEmpty) return;
 
     // Cancel existing subscription if any
     _otherDeviceSub?.cancel();
 
-    // Clear other device data
+    // Clear passenger device data
     setState(() {
       _otherAccel = [0, 0, 0];
       _otherGyro = [0, 0, 0];
@@ -290,49 +318,50 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
       isConnected = false;
     });
 
-    // Listen for all devices in the session
-    _otherDeviceSub = database.child('sessions/$sessionKey').onValue.listen((event) {
+    // Listen for passenger device data using session ID
+    _otherDeviceSub = database.child('sessions/$sessionId').onValue.listen((event) {
       final data = event.snapshot.value as Map?;
-      if (data != null && data.length >= 2) {
-        // At least two devices are present
-        // Find the other device (not this device)
-        String? otherId;
+      if (data != null) {
+        // Find passenger device (not the bus validator)
+        String? passengerDeviceId;
         for (final key in data.keys) {
-          if (key != deviceId) {
-            otherId = key;
+          final deviceData = data[key] as Map?;
+          if (deviceData != null && deviceData['device_type'] == 'passenger') {
+            passengerDeviceId = key;
             break;
           }
         }
-        if (otherId != null) {
-          final otherData = data[otherId] as Map?;
-          if (otherData != null) {
-            final accel = otherData['accel'] as Map?;
-            if (accel != null) {
-              _otherAccel = [
-                (accel['x'] ?? 0).toDouble(),
-                (accel['y'] ?? 0).toDouble(),
-                (accel['z'] ?? 0).toDouble(),
-              ];
-            }
-            final gyro = otherData['gyro'] as Map?;
-            if (gyro != null) {
-              _otherGyro = [
-                (gyro['x'] ?? 0).toDouble(),
-                (gyro['y'] ?? 0).toDouble(),
-                (gyro['z'] ?? 0).toDouble(),
-              ];
-            }
-            final location = otherData['location'] as Map?;
-            if (location != null) {
-              _otherLatitude = (location['latitude'] ?? 0).toDouble();
-              _otherLongitude = (location['longitude'] ?? 0).toDouble();
-            }
-            _otherSpeed = (otherData['speed'] ?? 0).toDouble();
+        
+        if (passengerDeviceId != null) {
+          final passengerData = data[passengerDeviceId] as Map?;
+          if (passengerData != null) {
+            setState(() {
+              final accel = passengerData['accel'] as Map?;
+              if (accel != null) {
+                _otherAccel = [
+                  (accel['x'] ?? 0).toDouble(),
+                  (accel['y'] ?? 0).toDouble(),
+                  (accel['z'] ?? 0).toDouble(),
+                ];
+              }
+              final gyro = passengerData['gyro'] as Map?;
+              if (gyro != null) {
+                _otherGyro = [
+                  (gyro['x'] ?? 0).toDouble(),
+                  (gyro['y'] ?? 0).toDouble(),
+                  (gyro['z'] ?? 0).toDouble(),
+                ];
+              }
+              final location = passengerData['location'] as Map?;
+              if (location != null) {
+                _otherLatitude = (location['latitude'] ?? 0).toDouble();
+                _otherLongitude = (location['longitude'] ?? 0).toDouble();
+              }
+              _otherSpeed = (passengerData['speed'] ?? 0).toDouble();
+              isConnected = true;
+            });
+            _compareMotionForFraudDetection();
           }
-          setState(() {
-            isConnected = true;
-          });
-          _compareMotion();
         }
       } else {
         setState(() {
@@ -340,63 +369,142 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
         });
       }
     }, onError: (error) {
-      print("Error listening to session: $error");
+      print("Error listening to passenger: $error");
     });
   }
 
-  void _compareMotion() {
-    double accelThreshold = 3.0; // Made more lenient for real-world usage
-    double gyroThreshold = 1.0; // Made more lenient for real-world usage
-    double speedThreshold = 2.0; // 2 m/s difference allowed (about 7.2 km/h)
-    double locationThreshold = 5.0; // 5 meters threshold for same location
+  void _compareMotionForFraudDetection() {
+    if (!mounted || !isConnected) return;
+    
+    const double accelThreshold = 3.0;  
+    const double gyroThreshold = 1.0;   
+    const double speedThreshold = 2.0;  
+    const double locationThreshold = 5.0; 
 
-    // Only compare if we have data from other device
+    // Only compare if we have data from passenger device
     if (_otherAccel.every((val) => val == 0.0) && _otherGyro.every((val) => val == 0.0)) {
       setState(() {
         isSameMotion = false;
         isSameLocation = false;
         isSameCoordinate = false;
+        correlationScore = 0.0;
       });
       return;
     }
 
-    // Calculate distance between devices in meters
-    double distance = Geolocator.distanceBetween(
+    // Calculate distance between bus and passenger in meters
+    final double distance = Geolocator.distanceBetween(
       _myLatitude, _myLongitude,
       _otherLatitude, _otherLongitude
     );
 
     // Calculate acceleration difference
-    double accelDiff = sqrt(
+    final double accelDiff = sqrt(
       pow(_myAccel[0] - _otherAccel[0], 2) +
       pow(_myAccel[1] - _otherAccel[1], 2) +
-      pow(_myAccel[2] - _otherAccel[2], 2),
+      pow(_myAccel[2] - _otherAccel[2], 2)
     );
 
     // Calculate gyroscope difference
-    double gyroDiff = sqrt(
+    final double gyroDiff = sqrt(
       pow(_myGyro[0] - _otherGyro[0], 2) +
       pow(_myGyro[1] - _otherGyro[1], 2) +
-      pow(_myGyro[2] - _otherGyro[2], 2),
+      pow(_myGyro[2] - _otherGyro[2], 2)
     );
 
     // Calculate speed difference
-    double speedDiff = (_mySpeed - _otherSpeed).abs();
+    final double speedDiff = (_mySpeed - _otherSpeed).abs();
 
-    // Update UI with comparison results
+    // Calculate correlation score (higher = more similar motion)
+    double accelScore = max(0.0, 1.0 - (accelDiff / 10.0));
+    double gyroScore = max(0.0, 1.0 - (gyroDiff / 5.0));
+    double speedScore = max(0.0, 1.0 - (speedDiff / 10.0));
+    double locationScore = max(0.0, 1.0 - (distance / 50.0));
+    
     setState(() {
+      correlationScore = (accelScore + gyroScore + speedScore + locationScore) / 4.0;
       isSameMotion = accelDiff < accelThreshold && gyroDiff < gyroThreshold;
       isSameLocation = speedDiff < speedThreshold;
       isSameCoordinate = distance < locationThreshold;
+    });
+
+    // Check for fraud (passenger not actually on bus)
+    bool isPassengerOnBus = correlationScore > 0.7 && isSameMotion && isSameLocation && isSameCoordinate;
+    
+    if (!isPassengerOnBus && currentBusStop > plannedExitStop) {
+      // Fraud detected: passenger should have exited but is still being tracked
+      _detectFraud();
+    }
+
+    // Store real-time validation data
+    if (sessionKey != null && currentPassengerId != null) {
+      database.child('fraud_detection/$sessionKey').set({
+        'passenger_id': currentPassengerId,
+        'bus_id': busId,
+        'planned_exit_stop': plannedExitStop,
+        'current_bus_stop': currentBusStop,
+        'correlation_score': correlationScore,
+        'is_on_bus': isPassengerOnBus,
+        'motion_match': isSameMotion,
+        'speed_match': isSameLocation,
+        'location_match': isSameCoordinate,
+        'distance_apart': distance,
+        'last_update': ServerValue.timestamp,
+      });
+    }
+  }
+
+  void _detectFraud() {
+    if (fraudDetected) return; // Already detected
+    
+    setState(() {
+      fraudDetected = true;
+    });
+
+    int extraStops = currentBusStop - plannedExitStop;
+    penaltyAmount = extraStops * 5.0; // ₹5 per extra stop
+
+    // Store fraud detection result
+    if (sessionKey != null && currentPassengerId != null) {
+      database.child('fraud_detection/$sessionKey').update({
+        'fraud_detected': true,
+        'planned_exit_stop': plannedExitStop,
+        'actual_exit_stop': currentBusStop,
+        'extra_stops': extraStops,
+        'penalty_amount': penaltyAmount,
+        'fraud_timestamp': ServerValue.timestamp,
+      });
+    }
+
+    // Show fraud alert
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('🚨 FRAUD DETECTED!\nPassenger $currentPassengerId\nExtra stops: $extraStops\nPenalty: ₹${penaltyAmount.toStringAsFixed(0)}'),
+        backgroundColor: Colors.red,
+        duration: Duration(seconds: 6),
+      ),
+    );
+  }
+
+  // Method to manually update bus stop (for demo purposes)
+  void _updateBusStop(int newStop) {
+    setState(() {
+      currentBusStop = newStop;
+    });
+    
+    database.child('bus_validators/$busId').update({
+      'current_stop': currentBusStop,
+      'lastUpdate': ServerValue.timestamp,
     });
   }
 
   @override
   void dispose() {
-    _accelSub.cancel();
-    _gyroSub.cancel();
+    _accelSub?.cancel();
+    _gyroSub?.cancel();
     _gpsTimer?.cancel();
     _otherDeviceSub?.cancel();
+    _passengerSessionListener?.cancel();
     super.dispose();
   }
 
@@ -404,95 +512,52 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Motion & Location Sync'),
+        title: Text('🚌 Bus Fraud Detection System'),
+        backgroundColor: Colors.red[800],
+        foregroundColor: Colors.white,
         actions: [
-          // Connection status
+          // Bus stop controller
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 8.0),
+            child: Row(
+              children: [
+                Text('Stop: ', style: TextStyle(color: Colors.white)),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text('$currentBusStop', 
+                      style: TextStyle(color: Colors.red[800], fontWeight: FontWeight.bold)),
+                ),
+                IconButton(
+                  icon: Icon(Icons.add, color: Colors.white),
+                  onPressed: () => _updateBusStop(currentBusStop + 1),
+                  tooltip: 'Next Stop',
+                ),
+              ],
+            ),
+          ),
+          // Status indicator
           Container(
             padding: EdgeInsets.symmetric(horizontal: 16.0),
             child: Row(
               children: [
                 Icon(
-                  isConnected ? Icons.link : Icons.link_off,
-                  color: isConnected ? Colors.green : Colors.red,
+                  fraudDetected ? Icons.warning : (isValidatingTicket ? Icons.search : Icons.bus_alert),
+                  color: fraudDetected ? Colors.orange : (isValidatingTicket ? Colors.green : Colors.white),
                 ),
                 SizedBox(width: 8),
                 Text(
-                  sessionKey ?? 'Not Connected',
+                  fraudDetected ? 'FRAUD!' : (isValidatingTicket ? 'Monitoring' : 'Ready'),
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: isConnected ? Colors.green : Colors.red,
-                  ),
-                ),
-                SizedBox(width: 8),
-                IconButton(
-                  icon: Icon(Icons.refresh),
-                  onPressed: _showConnectionDialog,
-                  tooltip: 'Change Connection Code',
-                ),
-              ],
-            ),
-          ),
-          // Device selector
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: 16.0),
-            child: PopupMenuButton<String>(
-              onSelected: (String newId) {
-                setState(() {
-                  deviceId = newId;
-                  _listenToOtherDevice(); // Reconnect with new device ID
-                });
-              },
-              itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                PopupMenuItem<String>(
-                  value: 'device1',
-                  child: Row(
-                    children: [
-                      Icon(Icons.phone_android, 
-                           color: deviceId == 'device1' ? Colors.blue : Colors.grey),
-                      SizedBox(width: 8),
-                      Text('Device 1',
-                           style: TextStyle(
-                             fontWeight: deviceId == 'device1' 
-                                        ? FontWeight.bold : FontWeight.normal
-                           )),
-                    ],
-                  ),
-                ),
-                PopupMenuItem<String>(
-                  value: 'device2',
-                  child: Row(
-                    children: [
-                      Icon(Icons.phone_android, 
-                           color: deviceId == 'device2' ? Colors.blue : Colors.grey),
-                      SizedBox(width: 8),
-                      Text('Device 2',
-                           style: TextStyle(
-                             fontWeight: deviceId == 'device2' 
-                                        ? FontWeight.bold : FontWeight.normal
-                           )),
-                    ],
+                    color: fraudDetected ? Colors.orange : Colors.white,
                   ),
                 ),
               ],
-              child: Container(
-                padding: EdgeInsets.symmetric(vertical: 8.0, horizontal: 12.0),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.white.withOpacity(0.5)),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.phone_android, size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      'Device: ${deviceId}',
-                      style: TextStyle(fontSize: 16),
-                    ),
-                    Icon(Icons.arrow_drop_down),
-                  ],
-                ),
-              ),
             ),
           ),
         ],
@@ -503,26 +568,32 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // My Device Sensors
+              // Bus Validator Status
               Card(
+                color: Colors.blue[50],
                 child: Padding(
                   padding: EdgeInsets.all(16.0),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('My Device (${deviceId})', 
-                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                      Row(
+                        children: [
+                          Icon(Icons.directions_bus, color: Colors.blue[800], size: 24),
+                          SizedBox(width: 8),
+                          Text('Bus Validator - $busId', 
+                              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.blue[800])),
+                        ],
+                      ),
                       SizedBox(height: 10),
-                      Text('Accelerometer:'),
-                      Text('X: ${_myAccel[0].toStringAsFixed(2)}'),
-                      Text('Y: ${_myAccel[1].toStringAsFixed(2)}'),
-                      Text('Z: ${_myAccel[2].toStringAsFixed(2)}'),
+                      Text('Status: ${isValidatingTicket ? "Validating Passenger" : "Ready for Validation"}',
+                           style: TextStyle(fontSize: 16, color: isValidatingTicket ? Colors.green[700] : Colors.orange[700])),
+                      if (sessionKey != null) ...[
+                        SizedBox(height: 5),
+                        Text('Current Session: $sessionKey', style: TextStyle(fontSize: 14, color: Colors.grey[700])),
+                      ],
                       SizedBox(height: 10),
-                      Text('Gyroscope:'),
-                      Text('X: ${_myGyro[0].toStringAsFixed(2)}'),
-                      Text('Y: ${_myGyro[1].toStringAsFixed(2)}'),
-                      Text('Z: ${_myGyro[2].toStringAsFixed(2)}'),
-                      SizedBox(height: 10),
+                      Text('Accelerometer: X: ${_myAccel[0].toStringAsFixed(2)}, Y: ${_myAccel[1].toStringAsFixed(2)}, Z: ${_myAccel[2].toStringAsFixed(2)}'),
+                      Text('Gyroscope: X: ${_myGyro[0].toStringAsFixed(2)}, Y: ${_myGyro[1].toStringAsFixed(2)}, Z: ${_myGyro[2].toStringAsFixed(2)}'),
                       Text('Speed: ${(_mySpeed * 3.6).toStringAsFixed(2)} km/h'),
                     ],
                   ),
@@ -530,35 +601,41 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
               ),
               SizedBox(height: 16),
               
-              // Other Device Sensors
-              Card(
-                child: Padding(
-                  padding: EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Other Device', 
-                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                      SizedBox(height: 10),
-                      Text('Accelerometer:'),
-                      Text('X: ${_otherAccel[0].toStringAsFixed(2)}'),
-                      Text('Y: ${_otherAccel[1].toStringAsFixed(2)}'),
-                      Text('Z: ${_otherAccel[2].toStringAsFixed(2)}'),
-                      SizedBox(height: 10),
-                      Text('Gyroscope:'),
-                      Text('X: ${_otherGyro[0].toStringAsFixed(2)}'),
-                      Text('Y: ${_otherGyro[1].toStringAsFixed(2)}'),
-                      Text('Z: ${_otherGyro[2].toStringAsFixed(2)}'),
-                      SizedBox(height: 10),
-                      Text('Speed: ${(_otherSpeed * 3.6).toStringAsFixed(2)} km/h'),
-                    ],
+              // Passenger Device Data (when connected)
+              if (isConnected) ...[
+                Card(
+                  color: Colors.green[50],
+                  child: Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.smartphone, color: Colors.green[700], size: 24),
+                            SizedBox(width: 8),
+                            Text('Passenger Device', 
+                                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.green[700])),
+                          ],
+                        ),
+                        SizedBox(height: 10),
+                        Text('Accelerometer: X: ${_otherAccel[0].toStringAsFixed(2)}, Y: ${_otherAccel[1].toStringAsFixed(2)}, Z: ${_otherAccel[2].toStringAsFixed(2)}'),
+                        Text('Gyroscope: X: ${_otherGyro[0].toStringAsFixed(2)}, Y: ${_otherGyro[1].toStringAsFixed(2)}, Z: ${_otherGyro[2].toStringAsFixed(2)}'),
+                        Text('Speed: ${(_otherSpeed * 3.6).toStringAsFixed(2)} km/h'),
+                        SizedBox(height: 8),
+                        Text('Correlation Score: ${(correlationScore * 100).toStringAsFixed(1)}%', 
+                             style: TextStyle(fontWeight: FontWeight.bold, 
+                                            color: correlationScore > 0.7 ? Colors.green : Colors.red)),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              SizedBox(height: 16),
+                SizedBox(height: 16),
+              ],
               
-              // Connection Status
+              // Validation Status
               Card(
+                color: isConnected ? Colors.white : Colors.grey[100],
                 child: Padding(
                   padding: EdgeInsets.all(16.0),
                   child: Column(
@@ -567,37 +644,21 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            isConnected ? Icons.cloud_done : Icons.cloud_off,
-                            color: isConnected ? Colors.green : Colors.red,
+                            isConnected ? Icons.phone_android : Icons.phone_android_outlined,
+                            color: isConnected ? Colors.green : Colors.grey,
                             size: 24,
                           ),
                           SizedBox(width: 8),
                           Text(
-                            isConnected ? "Connected to other device" : "Waiting for other device...",
-                            style: TextStyle(fontSize: 16),
+                            isConnected ? "Passenger Connected" : "Waiting for passenger...",
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           ),
                         ],
                       ),
                       if (!isConnected) ...[
                         SizedBox(height: 8),
                         Text(
-                          'Make sure both devices:',
-                          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                        ),
-                        Text(
-                          '1. Have internet connection',
-                          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                        ),
-                        Text(
-                          '2. Use the same connection key',
-                          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                        ),
-                        Text(
-                          '3. One device is set as Device 1',
-                          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                        ),
-                        Text(
-                          '4. Other device is set as Device 2',
+                          'Listening for new ticket purchases...',
                           style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                         ),
                       ],
@@ -607,63 +668,66 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
               ),
               SizedBox(height: 16),
               
-              // Sync Status
-              Card(
-                child: Padding(
-                  padding: EdgeInsets.all(16.0),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            isSameMotion ? Icons.sync : Icons.sync_disabled,
-                            color: isSameMotion ? Colors.green : Colors.red,
-                            size: 40,
+              // Validation Results (only show when connected)
+              if (isConnected) ...[
+                Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Column(
+                      children: [
+                        Text('Validation Results', 
+                             style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                        SizedBox(height: 16),
+                        
+                        // Fraud Detection Status
+                        Container(
+                          padding: EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: fraudDetected ? Colors.red[100] : Colors.green[100],
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: fraudDetected ? Colors.red : Colors.green,
+                              width: 2,
+                            ),
                           ),
-                          SizedBox(width: 10),
-                          Text(
-                            isSameMotion ? "Same Motion" : "Different Motion",
-                            style: TextStyle(fontSize: 20),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                fraudDetected ? Icons.error : Icons.verified_user,
+                                color: fraudDetected ? Colors.red[700] : Colors.green[700],
+                                size: 32,
+                              ),
+                              SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      fraudDetected ? "FRAUD DETECTED! ❌" : "PASSENGER VALIDATED ✅",
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: fraudDetected ? Colors.red[700] : Colors.green[700],
+                                      ),
+                                    ),
+                                    if (fraudDetected) ...[
+                                      SizedBox(height: 4),
+                                      Text(
+                                        'Penalty: ₹${penaltyAmount.toStringAsFixed(0)}',
+                                        style: TextStyle(fontSize: 16, color: Colors.red[700]),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                      SizedBox(height: 16),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            isSameLocation ? Icons.speed : Icons.speed_outlined,
-                            color: isSameLocation ? Colors.green : Colors.red,
-                            size: 40,
-                          ),
-                          SizedBox(width: 10),
-                          Text(
-                            isSameLocation ? "Same Speed" : "Different Speed",
-                            style: TextStyle(fontSize: 20),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 16),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            isSameCoordinate ? Icons.location_on : Icons.location_off,
-                            color: isSameCoordinate ? Colors.green : Colors.red,
-                            size: 40,
-                          ),
-                          SizedBox(width: 10),
-                          Text(
-                            isSameCoordinate ? "Same Location" : "Different Location",
-                            style: TextStyle(fontSize: 20),
-                          ),
-                        ],
-                      ),
-                    ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
