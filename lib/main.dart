@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
@@ -12,20 +13,21 @@ void main() async {
   
   try {
     await Firebase.initializeApp(
-      options: const FirebaseOptions(
-        apiKey: 'AIzaSyBuWJLOvmlpylyVFhivRfMEZSVGm1lA2jY',
-        appId: '1:266720440078:android:3feadecd459c79ab18b15f',
-        messagingSenderId: '266720440078',
-        projectId: 'gyre-compare',
-        databaseURL: 'https://gyre-compare-default-rtdb.firebaseio.com',
-        storageBucket: 'gyre-compare.firebasestorage.app',
+      options: FirebaseOptions(
+        apiKey: 'AIzaSyBtVDQhS0UO0csQgzH9131sGgrMpUQdbfk',
+        appId: '1:751952618795:android:371245ef36b575850b116e',
+        messagingSenderId: '751952618795',
+        projectId: 'smart-ticket-mtc',
+        databaseURL: 'https://smart-ticket-mtc-default-rtdb.firebaseio.com',
+        storageBucket: 'smart-ticket-mtc.firebasestorage.app',
       ),
     );
     
     // Test Firebase connection
     final database = FirebaseDatabase.instance;
     await database.ref('.info/connected').get();
-    print('Firebase initialized successfully');
+    print('Firebase connection successful - Smart Ticket MTC');
+    
   } catch (e) {
     print('Firebase initialization error: $e');
   }
@@ -37,66 +39,77 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Bus Fraud Detection',
-      debugShowCheckedModeBanner: false,
+      title: 'Smart Ticket Fraud Detection',
       theme: ThemeData(primarySwatch: Colors.red),
-      home: BusFraudDetectionPage(),
+      home: MotionSyncPage(),
     );
   }
 }
 
-class BusFraudDetectionPage extends StatefulWidget {
+class MotionSyncPage extends StatefulWidget {
   @override
-  _BusFraudDetectionPageState createState() => _BusFraudDetectionPageState();
+  _MotionSyncPageState createState() => _MotionSyncPageState();
 }
 
-class _BusFraudDetectionPageState extends State<BusFraudDetectionPage> {
+class _MotionSyncPageState extends State<MotionSyncPage> {
   final database = FirebaseDatabase.instance.ref();
-  StreamSubscription<AccelerometerEvent>? _accelSub;
-  StreamSubscription<GyroscopeEvent>? _gyroSub;
+  late StreamSubscription<AccelerometerEvent> _accelSub;
+  late StreamSubscription<GyroscopeEvent> _gyroSub;
   Timer? _gpsTimer;
-  StreamSubscription? _otherDeviceSub;
-  StreamSubscription? _passengerSessionListener;
 
-  // Motion and sensor data
   List<double> _myAccel = [0, 0, 0];
-  List<double> _otherAccel = [0, 0, 0];  
+  List<double> _otherAccel = [0, 0, 0];
+
   List<double> _myGyro = [0, 0, 0];
   List<double> _otherGyro = [0, 0, 0];
+
   double _mySpeed = 0.0;
   double _otherSpeed = 0.0;
   
-  // Location data
+  // Add location tracking
   double _myLatitude = 0.0;
   double _myLongitude = 0.0;
   double _otherLatitude = 0.0;
   double _otherLongitude = 0.0;
 
-  // Status flags
   bool isSameMotion = false;
   bool isSameLocation = false;
   bool isSameCoordinate = false;
   bool isConnected = false;
-  bool isValidatingTicket = false;
-  bool fraudDetected = false;
+  bool isMonitoring = false;
 
-  // Connection data
   String connectionKey = "";
   String? sessionKey;
-  String deviceId = "bus_validator_${DateTime.now().millisecondsSinceEpoch}";
-  String busId = "BUS_001";
+  String? currentTicketCode;
+  String deviceId = DateTime.now().millisecondsSinceEpoch.toString(); // Unique ID for each device
   
-  // Fraud detection variables
-  String? currentPassengerId;
-  int plannedExitStop = 0;
-  int currentBusStop = 0;
-  double correlationScore = 0.0;
-  double penaltyAmount = 0.0;
+  // Ticket monitoring
+  List<String> activeTickets = [];
+  StreamSubscription? _ticketMonitorSub;
 
   Future<bool> _checkLocationPermission() async {
+    // First check if location service is enabled
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      _showLocationDialog();
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: Text('Location Required'),
+            content: Text('This app needs location services to work. Please enable location services.'),
+            actions: [
+              TextButton(
+                child: Text('OPEN SETTINGS'),
+                onPressed: () async {
+                  await Geolocator.openLocationSettings();
+                  Navigator.of(context).pop();
+                },
+              ),
+            ],
+          );
+        },
+      );
       return false;
     }
 
@@ -127,38 +140,174 @@ class _BusFraudDetectionPageState extends State<BusFraudDetectionPage> {
     return true;
   }
 
-  void _showLocationDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text('Location Required'),
-          content: Text('This app needs location services to work. Please enable location services.'),
-          actions: [
-            TextButton(
-              child: Text('OPEN SETTINGS'),
-              onPressed: () async {
-                await Geolocator.openLocationSettings();
-                Navigator.of(context).pop();
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   @override
   void initState() {
     super.initState();
     _initializeApp();
   }
 
+  Future<void> _showConnectionDialog() async {
+    String? result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        String tempKey = '';
+        return AlertDialog(
+          title: Text('Enter Connection Code'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Enter the same code on both devices to connect:'),
+              SizedBox(height: 10),
+              TextField(
+                onChanged: (value) => tempKey = value.toUpperCase(),
+                textCapitalization: TextCapitalization.characters,
+                style: TextStyle(fontSize: 24, letterSpacing: 8),
+                textAlign: TextAlign.center,
+                maxLength: 6,
+                decoration: InputDecoration(
+                  hintText: 'ABC123',
+                  border: OutlineInputBorder(),
+                  counterText: "",
+                ),
+              ),
+              SizedBox(height: 10),
+              Text(
+                'Make sure both devices have internet connection',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              child: Text('Connect'),
+              onPressed: () {
+                if (tempKey.length >= 4) {
+                  Navigator.of(context).pop(tempKey);
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Please enter at least 4 characters'))
+                  );
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+
+    if (result != null && result.isNotEmpty) {
+      setState(() {
+        sessionKey = result.toUpperCase();
+        connectionKey = result.toUpperCase();
+      });
+      _startListening();
+      _listenToOtherDevice();
+      _startGpsUpdates();
+    }
+  }
+
+  // Start monitoring for new tickets in the smart ticket system
+  void _startTicketMonitoring() {
+    setState(() {
+      isMonitoring = true;
+    });
+    
+    print("Starting ticket monitoring...");
+    
+    // Monitor ticket_sensors for new ticket entries
+    _ticketMonitorSub = database.child('ticket_sensors').onValue.listen((event) {
+      final data = event.snapshot.value as Map?;
+      if (data != null) {
+        print("Found tickets in ticket_sensors: ${data.keys}");
+        
+        // Find the latest ticket (highest timestamp)
+        String? latestTicket;
+        int latestTimestamp = 0;
+        
+        for (final ticketCode in data.keys) {
+          final ticketData = data[ticketCode] as Map?;
+          if (ticketData != null && ticketData.containsKey('accelerometer')) {
+            // Extract timestamp from ticket code (TKT_timestamp format)
+            final timestampStr = ticketCode.toString().replaceFirst('TKT_', '');
+            try {
+              final timestamp = int.parse(timestampStr);
+              if (timestamp > latestTimestamp) {
+                latestTimestamp = timestamp;
+                latestTicket = ticketCode.toString();
+              }
+            } catch (e) {
+              print("Error parsing timestamp from ticket: $ticketCode");
+            }
+          }
+        }
+        
+        if (latestTicket != null && !activeTickets.contains(latestTicket)) {
+          print("Found latest active ticket: $latestTicket");
+          activeTickets.add(latestTicket);
+          _connectToTicket(latestTicket);
+        }
+      }
+    }, onError: (error) {
+      print("Error monitoring tickets: $error");
+    });
+  }
+
+  // Connect to a specific ticket automatically
+  void _connectToTicket(String ticketCode) {
+    print("Auto-connecting to ticket: $ticketCode");
+    setState(() {
+      sessionKey = ticketCode;
+      connectionKey = ticketCode;
+      currentTicketCode = ticketCode;
+    });
+    _listenToOtherDevice();
+  }
+
+  // Decrypt sensor data (implement based on your encryption)
+  Map<String, dynamic>? _decryptSensorData(String encryptedData) {
+    try {
+      print("Received encrypted data: ${encryptedData.substring(0, 50)}..."); // Debug log
+      
+      // Method 1: Try base64 decoding first
+      try {
+        String decoded = utf8.decode(base64.decode(encryptedData));
+        print("Base64 decoded: $decoded"); // Debug log
+        return json.decode(decoded);
+      } catch (e) {
+        print("Base64 decode failed: $e");
+      }
+      
+      // Method 2: Try direct JSON parsing (if not encrypted)
+      try {
+        return json.decode(encryptedData);
+      } catch (e) {
+        print("Direct JSON parse failed: $e");
+      }
+      
+      // Method 3: Custom decryption (you'll need to implement this based on your encryption key/algorithm)
+      // For now, create mock data to test the connection
+      print("Using mock data for testing");
+      return {
+        'accel': {'x': 1.5, 'y': 2.3, 'z': 9.8},
+        'gyro': {'x': 0.1, 'y': 0.2, 'z': 0.05},
+        'speed': 15.5,
+        'location': {'latitude': 13.0827, 'longitude': 80.2707}
+      };
+      
+    } catch (e) {
+      print("Decryption error: $e");
+      return null;
+    }
+  }
+
   Future<void> _initializeApp() async {
     bool hasPermission = await _checkLocationPermission();
     if (hasPermission) {
-      _startFraudDetectionMode();
+      _startTicketMonitoring(); // Start monitoring for new tickets automatically
+      _startListening(); // Start local sensor monitoring
+      _startGpsUpdates(); // Start GPS monitoring
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -173,80 +322,17 @@ class _BusFraudDetectionPageState extends State<BusFraudDetectionPage> {
     }
   }
 
-  void _startFraudDetectionMode() {
-    // Start listening for new passenger sessions from Smart Ticket MTC
-    _listenForPassengerSessions();
-    // Start collecting this device's sensor data (bus data)
-    _startListening();
-    _startGpsUpdates();
-    // Register this device as a bus validator
-    _registerBusValidator();
-  }
-
-  void _registerBusValidator() {
-    database.child('bus_validators/$busId').set({
-      'deviceId': deviceId,
-      'status': 'active',
-      'route': 'Route_42',
-      'current_stop': currentBusStop,
-      'lastUpdate': ServerValue.timestamp,
-    });
-  }
-
-  void _listenForPassengerSessions() {
-    _passengerSessionListener = database.child('passenger_sessions').onChildAdded.listen((event) {
-      final sessionData = event.snapshot.value as Map?;
-      if (sessionData != null) {
-        String sessionId = event.snapshot.key ?? '';
-        String passengerId = sessionData['passenger_id'] ?? '';
-        String ticketId = sessionData['ticket_id'] ?? '';
-        int plannedExit = sessionData['planned_exit_stop'] ?? 0;
-        String status = sessionData['status'] ?? '';
-        
-        if (sessionId.isNotEmpty && status == 'active') {
-          _connectToPassenger(sessionId, passengerId, ticketId, plannedExit);
-        }
-      }
-    });
-  }
-
-  void _connectToPassenger(String sessionId, String passengerId, String ticketId, int plannedExit) {
-    setState(() {
-      sessionKey = sessionId;
-      connectionKey = sessionId;
-      isValidatingTicket = true;
-      currentPassengerId = passengerId;
-      plannedExitStop = plannedExit;
-      fraudDetected = false;
-    });
-    
-    // Start listening to passenger's device sensor data
-    _listenToPassengerDevice(sessionId, passengerId);
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('🚌 New passenger detected!\nTicket: $ticketId\nPlanned Exit: Stop $plannedExit'),
-        duration: Duration(seconds: 4),
-        backgroundColor: Colors.blue,
-      ),
-    );
-  }
-
   void _startListening() {
     _accelSub = accelerometerEvents.listen((AccelerometerEvent event) {
-      setState(() {
-        _myAccel = [event.x, event.y, event.z];
-      });
+      _myAccel = [event.x, event.y, event.z];
       _sendToFirebase();
-      _compareMotionForFraudDetection();
+      _compareMotion();
     });
 
     _gyroSub = gyroscopeEvents.listen((GyroscopeEvent event) {
-      setState(() {
-        _myGyro = [event.x, event.y, event.z];
-      });
+      _myGyro = [event.x, event.y, event.z];
       _sendToFirebase();
-      _compareMotionForFraudDetection();
+      _compareMotion();
     });
   }
 
@@ -261,31 +347,24 @@ class _BusFraudDetectionPageState extends State<BusFraudDetectionPage> {
         if (permission == LocationPermission.deniedForever) return;
       }
 
-      try {
-        Position position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high
-        );
-        setState(() {
-          _mySpeed = position.speed;
-          _myLatitude = position.latitude;
-          _myLongitude = position.longitude;
-        });
-        _sendToFirebase();
-        _compareMotionForFraudDetection();
-      } catch (e) {
-        print('GPS error: $e');
-      }
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high
+      );
+      setState(() {
+        _mySpeed = position.speed; // speed in m/s
+        _myLatitude = position.latitude;
+        _myLongitude = position.longitude;
+      });
+      _sendToFirebase();
+      _compareMotion();
     });
   }
 
   void _sendToFirebase() {
     if (sessionKey == null) return;
     
-    // Send bus device data (this is the bus validator device)
-    database.child('sessions/$sessionKey/$deviceId').set({
-      'device_type': 'bus_validator',
-      'bus_id': busId,
-      'current_stop': currentBusStop,
+    // Send admin/inspector data for comparison - try root level path first
+    database.child('$sessionKey/admin_device').set({
       'accel': {'x': _myAccel[0], 'y': _myAccel[1], 'z': _myAccel[2]},
       'gyro': {'x': _myGyro[0], 'y': _myGyro[1], 'z': _myGyro[2]},
       'speed': _mySpeed,
@@ -293,22 +372,20 @@ class _BusFraudDetectionPageState extends State<BusFraudDetectionPage> {
         'latitude': _myLatitude,
         'longitude': _myLongitude,
       },
+      'device_type': 'admin',
       'last_update': ServerValue.timestamp,
-    }).then((_) {
-      // Remove this device's data when disconnected
-      database.child('sessions/$sessionKey/$deviceId')
-        .onDisconnect()
-        .remove();
     });
   }
 
-  void _listenToPassengerDevice(String sessionId, String passengerId) {
-    if (sessionId.isEmpty) return;
+  StreamSubscription? _otherDeviceSub;
+
+  void _listenToOtherDevice() {
+    if (sessionKey == null) return;
 
     // Cancel existing subscription if any
     _otherDeviceSub?.cancel();
 
-    // Clear passenger device data
+    // Clear other device data
     setState(() {
       _otherAccel = [0, 0, 0];
       _otherGyro = [0, 0, 0];
@@ -318,193 +395,140 @@ class _BusFraudDetectionPageState extends State<BusFraudDetectionPage> {
       isConnected = false;
     });
 
-    // Listen for passenger device data using session ID
-    _otherDeviceSub = database.child('sessions/$sessionId').onValue.listen((event) {
+    print("Listening to ticket data for: $sessionKey");
+
+    // Listen for real sensor data from ticket_sensors path
+    _otherDeviceSub = database.child('ticket_sensors/$sessionKey').onValue.listen((event) {
       final data = event.snapshot.value as Map?;
       if (data != null) {
-        // Find passenger device (not the bus validator)
-        String? passengerDeviceId;
-        for (final key in data.keys) {
-          final deviceData = data[key] as Map?;
-          if (deviceData != null && deviceData['device_type'] == 'passenger') {
-            passengerDeviceId = key;
-            break;
-          }
-        }
+        print("Received ticket sensor data: $data");
         
-        if (passengerDeviceId != null) {
-          final passengerData = data[passengerDeviceId] as Map?;
-          if (passengerData != null) {
+        try {
+          // Extract accelerometer data
+          final accel = data['accelerometer'] as Map?;
+          if (accel != null) {
             setState(() {
-              final accel = passengerData['accel'] as Map?;
-              if (accel != null) {
-                _otherAccel = [
-                  (accel['x'] ?? 0).toDouble(),
-                  (accel['y'] ?? 0).toDouble(),
-                  (accel['z'] ?? 0).toDouble(),
-                ];
-              }
-              final gyro = passengerData['gyro'] as Map?;
-              if (gyro != null) {
-                _otherGyro = [
-                  (gyro['x'] ?? 0).toDouble(),
-                  (gyro['y'] ?? 0).toDouble(),
-                  (gyro['z'] ?? 0).toDouble(),
-                ];
-              }
-              final location = passengerData['location'] as Map?;
-              if (location != null) {
-                _otherLatitude = (location['latitude'] ?? 0).toDouble();
-                _otherLongitude = (location['longitude'] ?? 0).toDouble();
-              }
-              _otherSpeed = (passengerData['speed'] ?? 0).toDouble();
-              isConnected = true;
+              _otherAccel = [
+                (accel['x'] ?? 0).toDouble(),
+                (accel['y'] ?? 0).toDouble(),
+                (accel['z'] ?? 0).toDouble(),
+              ];
             });
-            _compareMotionForFraudDetection();
+            print("Updated accelerometer: $_otherAccel");
           }
+          
+          // Extract gyroscope data (if available)
+          final gyro = data['gyroscope'] as Map?;
+          if (gyro != null) {
+            setState(() {
+              _otherGyro = [
+                (gyro['x'] ?? 0).toDouble(),
+                (gyro['y'] ?? 0).toDouble(),
+                (gyro['z'] ?? 0).toDouble(),
+              ];
+            });
+            print("Updated gyroscope: $_otherGyro");
+          }
+          
+          // Extract connection_code and deviceId info
+          final connectionCode = data['connection_code'] as String?;
+          final deviceId = data['deviceId'] as String?;
+          if (connectionCode != null) {
+            print("Connection code: $connectionCode, Device ID: $deviceId");
+          }
+          
+          // Extract GPS/location data (if available)
+          final gps = data['gps'] as Map?;
+          if (gps != null) {
+            setState(() {
+              _otherLatitude = (gps['latitude'] ?? 0).toDouble();
+              _otherLongitude = (gps['longitude'] ?? 0).toDouble();
+            });
+            print("Updated location: $_otherLatitude, $_otherLongitude");
+          }
+          
+          // Extract speed (if available)
+          final speed = data['speed'];
+          if (speed != null) {
+            setState(() {
+              _otherSpeed = speed.toDouble();
+            });
+            print("Updated speed: $_otherSpeed");
+          }
+          
+          setState(() {
+            isConnected = true;
+          });
+          _compareMotion();
+          
+        } catch (e) {
+          print("Error processing ticket sensor data: $e");
         }
       } else {
+        print("No data found for ticket: $sessionKey");
         setState(() {
           isConnected = false;
         });
       }
     }, onError: (error) {
-      print("Error listening to passenger: $error");
+      print("Error listening to ticket sensors: $error");
     });
   }
 
-  void _compareMotionForFraudDetection() {
-    if (!mounted || !isConnected) return;
-    
-    const double accelThreshold = 3.0;  
-    const double gyroThreshold = 1.0;   
-    const double speedThreshold = 2.0;  
-    const double locationThreshold = 5.0; 
+  void _compareMotion() {
+    double accelThreshold = 3.0; // Made more lenient for real-world usage
+    double gyroThreshold = 1.0; // Made more lenient for real-world usage
+    double speedThreshold = 2.0; // 2 m/s difference allowed (about 7.2 km/h)
+    double locationThreshold = 5.0; // 5 meters threshold for same location
 
-    // Only compare if we have data from passenger device
+    // Only compare if we have data from other device
     if (_otherAccel.every((val) => val == 0.0) && _otherGyro.every((val) => val == 0.0)) {
       setState(() {
         isSameMotion = false;
         isSameLocation = false;
         isSameCoordinate = false;
-        correlationScore = 0.0;
       });
       return;
     }
 
-    // Calculate distance between bus and passenger in meters
-    final double distance = Geolocator.distanceBetween(
+    // Calculate distance between devices in meters
+    double distance = Geolocator.distanceBetween(
       _myLatitude, _myLongitude,
       _otherLatitude, _otherLongitude
     );
 
     // Calculate acceleration difference
-    final double accelDiff = sqrt(
+    double accelDiff = sqrt(
       pow(_myAccel[0] - _otherAccel[0], 2) +
       pow(_myAccel[1] - _otherAccel[1], 2) +
-      pow(_myAccel[2] - _otherAccel[2], 2)
+      pow(_myAccel[2] - _otherAccel[2], 2),
     );
 
     // Calculate gyroscope difference
-    final double gyroDiff = sqrt(
+    double gyroDiff = sqrt(
       pow(_myGyro[0] - _otherGyro[0], 2) +
       pow(_myGyro[1] - _otherGyro[1], 2) +
-      pow(_myGyro[2] - _otherGyro[2], 2)
+      pow(_myGyro[2] - _otherGyro[2], 2),
     );
 
     // Calculate speed difference
-    final double speedDiff = (_mySpeed - _otherSpeed).abs();
+    double speedDiff = (_mySpeed - _otherSpeed).abs();
 
-    // Calculate correlation score (higher = more similar motion)
-    double accelScore = max(0.0, 1.0 - (accelDiff / 10.0));
-    double gyroScore = max(0.0, 1.0 - (gyroDiff / 5.0));
-    double speedScore = max(0.0, 1.0 - (speedDiff / 10.0));
-    double locationScore = max(0.0, 1.0 - (distance / 50.0));
-    
+    // Update UI with comparison results
     setState(() {
-      correlationScore = (accelScore + gyroScore + speedScore + locationScore) / 4.0;
       isSameMotion = accelDiff < accelThreshold && gyroDiff < gyroThreshold;
       isSameLocation = speedDiff < speedThreshold;
       isSameCoordinate = distance < locationThreshold;
-    });
-
-    // Check for fraud (passenger not actually on bus)
-    bool isPassengerOnBus = correlationScore > 0.7 && isSameMotion && isSameLocation && isSameCoordinate;
-    
-    if (!isPassengerOnBus && currentBusStop > plannedExitStop) {
-      // Fraud detected: passenger should have exited but is still being tracked
-      _detectFraud();
-    }
-
-    // Store real-time validation data
-    if (sessionKey != null && currentPassengerId != null) {
-      database.child('fraud_detection/$sessionKey').set({
-        'passenger_id': currentPassengerId,
-        'bus_id': busId,
-        'planned_exit_stop': plannedExitStop,
-        'current_bus_stop': currentBusStop,
-        'correlation_score': correlationScore,
-        'is_on_bus': isPassengerOnBus,
-        'motion_match': isSameMotion,
-        'speed_match': isSameLocation,
-        'location_match': isSameCoordinate,
-        'distance_apart': distance,
-        'last_update': ServerValue.timestamp,
-      });
-    }
-  }
-
-  void _detectFraud() {
-    if (fraudDetected) return; // Already detected
-    
-    setState(() {
-      fraudDetected = true;
-    });
-
-    int extraStops = currentBusStop - plannedExitStop;
-    penaltyAmount = extraStops * 5.0; // ₹5 per extra stop
-
-    // Store fraud detection result
-    if (sessionKey != null && currentPassengerId != null) {
-      database.child('fraud_detection/$sessionKey').update({
-        'fraud_detected': true,
-        'planned_exit_stop': plannedExitStop,
-        'actual_exit_stop': currentBusStop,
-        'extra_stops': extraStops,
-        'penalty_amount': penaltyAmount,
-        'fraud_timestamp': ServerValue.timestamp,
-      });
-    }
-
-    // Show fraud alert
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('🚨 FRAUD DETECTED!\nPassenger $currentPassengerId\nExtra stops: $extraStops\nPenalty: ₹${penaltyAmount.toStringAsFixed(0)}'),
-        backgroundColor: Colors.red,
-        duration: Duration(seconds: 6),
-      ),
-    );
-  }
-
-  // Method to manually update bus stop (for demo purposes)
-  void _updateBusStop(int newStop) {
-    setState(() {
-      currentBusStop = newStop;
-    });
-    
-    database.child('bus_validators/$busId').update({
-      'current_stop': currentBusStop,
-      'lastUpdate': ServerValue.timestamp,
     });
   }
 
   @override
   void dispose() {
-    _accelSub?.cancel();
-    _gyroSub?.cancel();
+    _accelSub.cancel();
+    _gyroSub.cancel();
     _gpsTimer?.cancel();
     _otherDeviceSub?.cancel();
-    _passengerSessionListener?.cancel();
+    _ticketMonitorSub?.cancel();
     super.dispose();
   }
 
@@ -512,49 +536,46 @@ class _BusFraudDetectionPageState extends State<BusFraudDetectionPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('🚌 Bus Fraud Detection System'),
-        backgroundColor: Colors.red[800],
-        foregroundColor: Colors.white,
+        title: Text('Smart Ticket Fraud Detection'),
+        backgroundColor: Colors.red,
         actions: [
-          // Bus stop controller
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: 8.0),
-            child: Row(
-              children: [
-                Text('Stop: ', style: TextStyle(color: Colors.white)),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text('$currentBusStop', 
-                      style: TextStyle(color: Colors.red[800], fontWeight: FontWeight.bold)),
-                ),
-                IconButton(
-                  icon: Icon(Icons.add, color: Colors.white),
-                  onPressed: () => _updateBusStop(currentBusStop + 1),
-                  tooltip: 'Next Stop',
-                ),
-              ],
-            ),
-          ),
-          // Status indicator
+          // Monitoring status
           Container(
             padding: EdgeInsets.symmetric(horizontal: 16.0),
             child: Row(
               children: [
                 Icon(
-                  fraudDetected ? Icons.warning : (isValidatingTicket ? Icons.search : Icons.bus_alert),
-                  color: fraudDetected ? Colors.orange : (isValidatingTicket ? Colors.green : Colors.white),
+                  isMonitoring ? Icons.radar : Icons.radar_outlined,
+                  color: isMonitoring ? Colors.green : Colors.grey,
                 ),
                 SizedBox(width: 8),
                 Text(
-                  fraudDetected ? 'FRAUD!' : (isValidatingTicket ? 'Monitoring' : 'Ready'),
+                  isMonitoring ? 'MONITORING' : 'OFFLINE',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: isMonitoring ? Colors.green : Colors.grey,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Current ticket status
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 16.0),
+            child: Row(
+              children: [
+                Icon(
+                  isConnected ? Icons.link : Icons.link_off,
+                  color: isConnected ? Colors.green : Colors.red,
+                ),
+                SizedBox(width: 8),
+                Text(
+                  currentTicketCode ?? 'No Ticket',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: fraudDetected ? Colors.orange : Colors.white,
+                    color: isConnected ? Colors.green : Colors.red,
                   ),
                 ),
               ],
@@ -568,32 +589,26 @@ class _BusFraudDetectionPageState extends State<BusFraudDetectionPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Bus Validator Status
+              // My Device Sensors
               Card(
-                color: Colors.blue[50],
                 child: Padding(
                   padding: EdgeInsets.all(16.0),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          Icon(Icons.directions_bus, color: Colors.blue[800], size: 24),
-                          SizedBox(width: 8),
-                          Text('Bus Validator - $busId', 
-                              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.blue[800])),
-                        ],
-                      ),
+                      Text('Admin Device (Inspector)', 
+                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.red)),
                       SizedBox(height: 10),
-                      Text('Status: ${isValidatingTicket ? "Validating Passenger" : "Ready for Validation"}',
-                           style: TextStyle(fontSize: 16, color: isValidatingTicket ? Colors.green[700] : Colors.orange[700])),
-                      if (sessionKey != null) ...[
-                        SizedBox(height: 5),
-                        Text('Current Session: $sessionKey', style: TextStyle(fontSize: 14, color: Colors.grey[700])),
-                      ],
+                      Text('Accelerometer:'),
+                      Text('X: ${_myAccel[0].toStringAsFixed(2)}'),
+                      Text('Y: ${_myAccel[1].toStringAsFixed(2)}'),
+                      Text('Z: ${_myAccel[2].toStringAsFixed(2)}'),
                       SizedBox(height: 10),
-                      Text('Accelerometer: X: ${_myAccel[0].toStringAsFixed(2)}, Y: ${_myAccel[1].toStringAsFixed(2)}, Z: ${_myAccel[2].toStringAsFixed(2)}'),
-                      Text('Gyroscope: X: ${_myGyro[0].toStringAsFixed(2)}, Y: ${_myGyro[1].toStringAsFixed(2)}, Z: ${_myGyro[2].toStringAsFixed(2)}'),
+                      Text('Gyroscope:'),
+                      Text('X: ${_myGyro[0].toStringAsFixed(2)}'),
+                      Text('Y: ${_myGyro[1].toStringAsFixed(2)}'),
+                      Text('Z: ${_myGyro[2].toStringAsFixed(2)}'),
+                      SizedBox(height: 10),
                       Text('Speed: ${(_mySpeed * 3.6).toStringAsFixed(2)} km/h'),
                     ],
                   ),
@@ -601,41 +616,35 @@ class _BusFraudDetectionPageState extends State<BusFraudDetectionPage> {
               ),
               SizedBox(height: 16),
               
-              // Passenger Device Data (when connected)
-              if (isConnected) ...[
-                Card(
-                  color: Colors.green[50],
-                  child: Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.smartphone, color: Colors.green[700], size: 24),
-                            SizedBox(width: 8),
-                            Text('Passenger Device', 
-                                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.green[700])),
-                          ],
-                        ),
-                        SizedBox(height: 10),
-                        Text('Accelerometer: X: ${_otherAccel[0].toStringAsFixed(2)}, Y: ${_otherAccel[1].toStringAsFixed(2)}, Z: ${_otherAccel[2].toStringAsFixed(2)}'),
-                        Text('Gyroscope: X: ${_otherGyro[0].toStringAsFixed(2)}, Y: ${_otherGyro[1].toStringAsFixed(2)}, Z: ${_otherGyro[2].toStringAsFixed(2)}'),
-                        Text('Speed: ${(_otherSpeed * 3.6).toStringAsFixed(2)} km/h'),
-                        SizedBox(height: 8),
-                        Text('Correlation Score: ${(correlationScore * 100).toStringAsFixed(1)}%', 
-                             style: TextStyle(fontWeight: FontWeight.bold, 
-                                            color: correlationScore > 0.7 ? Colors.green : Colors.red)),
-                      ],
-                    ),
+              // Other Device Sensors
+              Card(
+                child: Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Passenger Device (Ticket Holder)', 
+                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.blue)),
+                      SizedBox(height: 10),
+                      Text('Accelerometer:'),
+                      Text('X: ${_otherAccel[0].toStringAsFixed(2)}'),
+                      Text('Y: ${_otherAccel[1].toStringAsFixed(2)}'),
+                      Text('Z: ${_otherAccel[2].toStringAsFixed(2)}'),
+                      SizedBox(height: 10),
+                      Text('Gyroscope:'),
+                      Text('X: ${_otherGyro[0].toStringAsFixed(2)}'),
+                      Text('Y: ${_otherGyro[1].toStringAsFixed(2)}'),
+                      Text('Z: ${_otherGyro[2].toStringAsFixed(2)}'),
+                      SizedBox(height: 10),
+                      Text('Speed: ${(_otherSpeed * 3.6).toStringAsFixed(2)} km/h'),
+                    ],
                   ),
                 ),
-                SizedBox(height: 16),
-              ],
+              ),
+              SizedBox(height: 16),
               
-              // Validation Status
+              // Connection Status
               Card(
-                color: isConnected ? Colors.white : Colors.grey[100],
                 child: Padding(
                   padding: EdgeInsets.all(16.0),
                   child: Column(
@@ -644,23 +653,42 @@ class _BusFraudDetectionPageState extends State<BusFraudDetectionPage> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            isConnected ? Icons.phone_android : Icons.phone_android_outlined,
-                            color: isConnected ? Colors.green : Colors.grey,
+                            isConnected ? Icons.cloud_done : Icons.cloud_off,
+                            color: isConnected ? Colors.green : Colors.red,
                             size: 24,
                           ),
                           SizedBox(width: 8),
                           Text(
-                            isConnected ? "Passenger Connected" : "Waiting for passenger...",
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                            isConnected ? "Connected to ticket holder" : "Waiting for ticket...",
+                            style: TextStyle(fontSize: 16),
                           ),
                         ],
                       ),
                       if (!isConnected) ...[
                         SizedBox(height: 8),
                         Text(
-                          'Listening for new ticket purchases...',
+                          'System Status:',
                           style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                         ),
+                        Text(
+                          '• Monitoring smart ticket database',
+                          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                        ),
+                        Text(
+                          '• Auto-connecting to new tickets',
+                          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                        ),
+                        Text(
+                          '• Decrypting sensor data',
+                          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                        ),
+                        if (activeTickets.isNotEmpty) ...[
+                          SizedBox(height: 8),
+                          Text(
+                            'Active Tickets: ${activeTickets.length}',
+                            style: TextStyle(fontSize: 14, color: Colors.orange[600]),
+                          ),
+                        ],
                       ],
                     ],
                   ),
@@ -668,66 +696,101 @@ class _BusFraudDetectionPageState extends State<BusFraudDetectionPage> {
               ),
               SizedBox(height: 16),
               
-              // Validation Results (only show when connected)
-              if (isConnected) ...[
-                Card(
-                  child: Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: Column(
-                      children: [
-                        Text('Validation Results', 
-                             style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                        SizedBox(height: 16),
-                        
-                        // Fraud Detection Status
-                        Container(
-                          padding: EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: fraudDetected ? Colors.red[100] : Colors.green[100],
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: fraudDetected ? Colors.red : Colors.green,
-                              width: 2,
-                            ),
+              // Sync Status
+              Card(
+                child: Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            isSameMotion ? Icons.sync : Icons.sync_disabled,
+                            color: isSameMotion ? Colors.green : Colors.red,
+                            size: 40,
                           ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                fraudDetected ? Icons.error : Icons.verified_user,
-                                color: fraudDetected ? Colors.red[700] : Colors.green[700],
-                                size: 32,
-                              ),
-                              SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  children: [
-                                    Text(
-                                      fraudDetected ? "FRAUD DETECTED! ❌" : "PASSENGER VALIDATED ✅",
-                                      style: TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.bold,
-                                        color: fraudDetected ? Colors.red[700] : Colors.green[700],
-                                      ),
-                                    ),
-                                    if (fraudDetected) ...[
-                                      SizedBox(height: 4),
-                                      Text(
-                                        'Penalty: ₹${penaltyAmount.toStringAsFixed(0)}',
-                                        style: TextStyle(fontSize: 16, color: Colors.red[700]),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            ],
+                          SizedBox(width: 10),
+                          Text(
+                            isSameMotion ? "Motion Match" : "Motion Mismatch",
+                            style: TextStyle(fontSize: 20),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            isSameLocation ? Icons.speed : Icons.speed_outlined,
+                            color: isSameLocation ? Colors.green : Colors.red,
+                            size: 40,
+                          ),
+                          SizedBox(width: 10),
+                          Text(
+                            isSameLocation ? "Speed Match" : "Speed Mismatch",
+                            style: TextStyle(fontSize: 20),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            isSameCoordinate ? Icons.location_on : Icons.location_off,
+                            color: isSameCoordinate ? Colors.green : Colors.red,
+                            size: 40,
+                          ),
+                          SizedBox(width: 10),
+                          Text(
+                            isSameCoordinate ? "Location Match" : "Location Mismatch",
+                            style: TextStyle(fontSize: 20),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 16),
+                      // Fraud detection summary
+                      Container(
+                        padding: EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: (!isSameMotion || !isSameLocation || !isSameCoordinate) 
+                                 ? Colors.red[100] : Colors.green[100],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: (!isSameMotion || !isSameLocation || !isSameCoordinate) 
+                                   ? Colors.red : Colors.green,
+                            width: 2,
                           ),
                         ),
-                      ],
-                    ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              (!isSameMotion || !isSameLocation || !isSameCoordinate) 
+                                 ? Icons.warning : Icons.check_circle,
+                              color: (!isSameMotion || !isSameLocation || !isSameCoordinate) 
+                                     ? Colors.red : Colors.green,
+                              size: 32,
+                            ),
+                            SizedBox(width: 10),
+                            Text(
+                              (!isSameMotion || !isSameLocation || !isSameCoordinate) 
+                                 ? "FRAUD DETECTED!" : "No Fraud Detected",
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: (!isSameMotion || !isSameLocation || !isSameCoordinate) 
+                                       ? Colors.red : Colors.green,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
+              ),
             ],
           ),
         ),

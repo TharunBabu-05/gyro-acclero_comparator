@@ -1,21 +1,22 @@
 {
   "project_info": {
-    "project_number": "266720440078",
-    "project_id": "gyre-compare",
-    "storage_bucket": "gyre-compare.firebasestorage.app"
+    "project_number": "751952618795",
+    "firebase_url": "https://smart-ticket-mtc-default-rtdb.firebaseio.com",
+    "project_id": "smart-ticket-mtc",
+    "storage_bucket": "smart-ticket-mtc.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:266720440078:android:3feadecd459c79ab18b15f",
+        "mobilesdk_app_id": "1:751952618795:android:371245ef36b575850b116e",
         "android_client_info": {
-          "package_name": "com.example.gyro_compare_fixed"
+          "package_name": "com.gyro.comparator.system"
         }
       },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBuWJLOvmlpylyVFhivRfMEZSVGm1lA2jY"
+          "current_key": "AIzaSyBtVDQhS0UO0csQgzH9131sGgrMpUQdbfk"
         }
       ],
       "services": {
@@ -26,15 +27,15 @@
     },
     {
       "client_info": {
-        "mobilesdk_app_id": "1:266720440078:android:be56bc596500b60718b15f",
+        "mobilesdk_app_id": "1:751952618795:android:4b01b0e31e3290a10b116e",
         "android_client_info": {
-          "package_name": "com.gyro.andriod"
+          "package_name": "com.smart.ticket_system"
         }
       },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBuWJLOvmlpylyVFhivRfMEZSVGm1lA2jY"
+          "current_key": "AIzaSyBtVDQhS0UO0csQgzH9131sGgrMpUQdbfk"
         }
       ],
       "services": {
