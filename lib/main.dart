@@ -323,21 +323,34 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
   }
 
   void _startListening() {
+    print("Starting sensor listeners...");
+    // Use regular sensor streams for better compatibility
     _accelSub = accelerometerEvents.listen((AccelerometerEvent event) {
-      _myAccel = [event.x, event.y, event.z];
+      print("Accel event: ${event.x}, ${event.y}, ${event.z}");
+      setState(() {
+        _myAccel = [event.x, event.y, event.z];
+      });
       _sendToFirebase();
       _compareMotion();
+    }, onError: (error) {
+      print("Accelerometer error: $error");
     });
 
     _gyroSub = gyroscopeEvents.listen((GyroscopeEvent event) {
-      _myGyro = [event.x, event.y, event.z];
+      print("Gyro event: ${event.x}, ${event.y}, ${event.z}");
+      setState(() {
+        _myGyro = [event.x, event.y, event.z];
+      });
       _sendToFirebase();
       _compareMotion();
+    }, onError: (error) {
+      print("Gyroscope error: $error");
     });
   }
 
   void _startGpsUpdates() {
-    _gpsTimer = Timer.periodic(Duration(seconds: 2), (_) async {
+    // Reduce GPS frequency to avoid blocking sensor updates
+    _gpsTimer = Timer.periodic(Duration(seconds: 5), (_) async {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) return;
 
@@ -348,7 +361,7 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
       }
 
       Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high
+        desiredAccuracy: LocationAccuracy.medium // Reduced accuracy for speed
       );
       setState(() {
         _mySpeed = position.speed; // speed in m/s
@@ -356,14 +369,13 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
         _myLongitude = position.longitude;
       });
       _sendToFirebase();
-      _compareMotion();
     });
   }
 
   void _sendToFirebase() {
     if (sessionKey == null) return;
     
-    // Send admin/inspector data for comparison - try root level path first
+    // Fast Firebase updates without waiting for response
     database.child('$sessionKey/admin_device').set({
       'accel': {'x': _myAccel[0], 'y': _myAccel[1], 'z': _myAccel[2]},
       'gyro': {'x': _myGyro[0], 'y': _myGyro[1], 'z': _myGyro[2]},
@@ -374,6 +386,8 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
       },
       'device_type': 'admin',
       'last_update': ServerValue.timestamp,
+    }).catchError((error) {
+      // Silent error handling to avoid blocking
     });
   }
 
@@ -397,75 +411,60 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
 
     print("Listening to ticket data for: $sessionKey");
 
-    // Listen for real sensor data from ticket_sensors path
+    // Listen for real sensor data from ticket_sensors path - optimized for speed
     _otherDeviceSub = database.child('ticket_sensors/$sessionKey').onValue.listen((event) {
       final data = event.snapshot.value as Map?;
+      print("Raw ticket data received: $data"); // Debug log
       if (data != null) {
-        print("Received ticket sensor data: $data");
-        
         try {
-          // Extract accelerometer data
+          // Process all data at once without multiple setState calls
           final accel = data['accelerometer'] as Map?;
-          if (accel != null) {
-            setState(() {
+          final gyro = data['gyroscope'] as Map?;
+          final gps = data['gps'] as Map?;
+          final speed = data['speed'];
+          
+          print("Accel data: $accel, Gyro data: $gyro"); // Debug log
+          
+          // Single setState for all updates - maximum speed
+          setState(() {
+            if (accel != null) {
               _otherAccel = [
                 (accel['x'] ?? 0).toDouble(),
                 (accel['y'] ?? 0).toDouble(),
                 (accel['z'] ?? 0).toDouble(),
               ];
-            });
-            print("Updated accelerometer: $_otherAccel");
-          }
-          
-          // Extract gyroscope data (if available)
-          final gyro = data['gyroscope'] as Map?;
-          if (gyro != null) {
-            setState(() {
+              print("Updated other accel: $_otherAccel"); // Debug log
+            }
+            
+            if (gyro != null) {
               _otherGyro = [
                 (gyro['x'] ?? 0).toDouble(),
                 (gyro['y'] ?? 0).toDouble(),
                 (gyro['z'] ?? 0).toDouble(),
               ];
-            });
-            print("Updated gyroscope: $_otherGyro");
-          }
-          
-          // Extract connection_code and deviceId info
-          final connectionCode = data['connection_code'] as String?;
-          final deviceId = data['deviceId'] as String?;
-          if (connectionCode != null) {
-            print("Connection code: $connectionCode, Device ID: $deviceId");
-          }
-          
-          // Extract GPS/location data (if available)
-          final gps = data['gps'] as Map?;
-          if (gps != null) {
-            setState(() {
+              print("Updated other gyro: $_otherGyro"); // Debug log
+            }
+            
+            if (gps != null) {
               _otherLatitude = (gps['latitude'] ?? 0).toDouble();
               _otherLongitude = (gps['longitude'] ?? 0).toDouble();
-            });
-            print("Updated location: $_otherLatitude, $_otherLongitude");
-          }
-          
-          // Extract speed (if available)
-          final speed = data['speed'];
-          if (speed != null) {
-            setState(() {
+            }
+            
+            if (speed != null) {
               _otherSpeed = speed.toDouble();
-            });
-            print("Updated speed: $_otherSpeed");
-          }
-          
-          setState(() {
+            }
+            
             isConnected = true;
           });
+          
+          // Immediate motion comparison for real-time feedback
           _compareMotion();
           
         } catch (e) {
-          print("Error processing ticket sensor data: $e");
+          print("Error processing sensor data: $e");
         }
       } else {
-        print("No data found for ticket: $sessionKey");
+        print("No data received for ticket: $sessionKey");
         setState(() {
           isConnected = false;
         });
