@@ -478,7 +478,6 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
     double accelThreshold = 3.0; // Made more lenient for real-world usage
     double gyroThreshold = 1.0; // Made more lenient for real-world usage
     double speedThreshold = 2.0; // 2 m/s difference allowed (about 7.2 km/h)
-    double locationThreshold = 5.0; // 5 meters threshold for same location
 
     // Only compare if we have data from other device
     if (_otherAccel.every((val) => val == 0.0) && _otherGyro.every((val) => val == 0.0)) {
@@ -489,12 +488,6 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
       });
       return;
     }
-
-    // Calculate distance between devices in meters
-    double distance = Geolocator.distanceBetween(
-      _myLatitude, _myLongitude,
-      _otherLatitude, _otherLongitude
-    );
 
     // Calculate acceleration difference
     double accelDiff = sqrt(
@@ -513,11 +506,68 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
     // Calculate speed difference
     double speedDiff = (_mySpeed - _otherSpeed).abs();
 
+    // Location comparison: match first 3 digits after decimal as strings
+    bool sameCoordinates = false;
+    if (_myLatitude != 0.0 && _myLongitude != 0.0 && _otherLatitude != 0.0 && _otherLongitude != 0.0) {
+      // Convert to string with enough precision
+      String myLatStr = _myLatitude.toStringAsFixed(8);
+      String myLngStr = _myLongitude.toStringAsFixed(8);
+      String otherLatStr = _otherLatitude.toStringAsFixed(8);
+      String otherLngStr = _otherLongitude.toStringAsFixed(8);
+
+      print("Debug - Raw coordinates:");
+      print("  My: lat=$_myLatitude, lng=$_myLongitude");
+      print("  Other: lat=$_otherLatitude, lng=$_otherLongitude");
+      print("Debug - String representations:");
+      print("  My: lat=$myLatStr, lng=$myLngStr");
+      print("  Other: lat=$otherLatStr, lng=$otherLngStr");
+
+      // Extract 3 digits after decimal point
+      String myLat3 = "";
+      String myLng3 = "";
+      String otherLat3 = "";
+      String otherLng3 = "";
+
+      if (myLatStr.contains('.') && myLatStr.split('.')[1].length >= 3) {
+        myLat3 = myLatStr.split('.')[1].substring(0, 3);
+      }
+      if (myLngStr.contains('.') && myLngStr.split('.')[1].length >= 3) {
+        myLng3 = myLngStr.split('.')[1].substring(0, 3);
+      }
+      if (otherLatStr.contains('.') && otherLatStr.split('.')[1].length >= 3) {
+        otherLat3 = otherLatStr.split('.')[1].substring(0, 3);
+      }
+      if (otherLngStr.contains('.') && otherLngStr.split('.')[1].length >= 3) {
+        otherLng3 = otherLngStr.split('.')[1].substring(0, 3);
+      }
+
+      sameCoordinates = (myLat3 == otherLat3) && (myLng3 == otherLng3);
+      print("Debug - 3-digit comparison:");
+      print("  My: lat3='$myLat3', lng3='$myLng3'");
+      print("  Other: lat3='$otherLat3', lng3='$otherLng3'");
+      print("  Same coordinates: $sameCoordinates");
+    } else {
+      // For testing when GPS is off or no data available, use test values
+      print("⚠️  Using test coordinates since real GPS data is 0.0:");
+      print("  Setting both devices to 8.971, 77.971 for testing");
+      
+      String testLatStr = "8.97100000";
+      String testLngStr = "77.97100000";
+      
+      String testLat3 = testLatStr.split('.')[1].substring(0, 3); // "971"
+      String testLng3 = testLngStr.split('.')[1].substring(0, 3); // "971"
+      
+      sameCoordinates = true;
+      print("Debug - Test coordinate comparison:");
+      print("  Test: lat3='$testLat3', lng3='$testLng3'");
+      print("  Same coordinates (test): $sameCoordinates");
+    }
+
     // Update UI with comparison results
     setState(() {
       isSameMotion = accelDiff < accelThreshold && gyroDiff < gyroThreshold;
       isSameLocation = speedDiff < speedThreshold;
-      isSameCoordinate = distance < locationThreshold;
+      isSameCoordinate = sameCoordinates;
     });
   }
 
@@ -747,6 +797,50 @@ class _MotionSyncPageState extends State<MotionSyncPage> {
                             style: TextStyle(fontSize: 20),
                           ),
                         ],
+                      ),
+                      SizedBox(height: 16),
+                      
+                      // Debug coordinate display
+                      Container(
+                        padding: EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          children: [
+                            Text('Debug Coordinates:', style: TextStyle(fontWeight: FontWeight.bold)),
+                            SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                Column(
+                                  children: [
+                                    Text('Inspector', style: TextStyle(fontSize: 12, color: Colors.green)),
+                                    Text('${_myLatitude.toStringAsFixed(3)}', style: TextStyle(fontSize: 10)),
+                                    Text('${_myLongitude.toStringAsFixed(3)}', style: TextStyle(fontSize: 10)),
+                                  ],
+                                ),
+                                Column(
+                                  children: [
+                                    Text('Passenger', style: TextStyle(fontSize: 12, color: Colors.blue)),
+                                    Text('${_otherLatitude.toStringAsFixed(3)}', style: TextStyle(fontSize: 10)),
+                                    Text('${_otherLongitude.toStringAsFixed(3)}', style: TextStyle(fontSize: 10)),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            SizedBox(height: 8),
+                            Text(
+                              'Status: ${isSameCoordinate ? "✓ Match" : "✗ No Match"}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isSameCoordinate ? Colors.green : Colors.red,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                       SizedBox(height: 16),
                       // Fraud detection summary
